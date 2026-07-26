@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ambre-anonymous"
+version = "0.1.0"
+description = "Anonymous implementation of AMBRE for multi-knowledge-graph completion."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "pykeen>=1.10",
+    "torch",
+    "tqdm",
+]
+
+[project.scripts]
+ambre-run = "ambre.experiments:main"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
