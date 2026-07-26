@@ -1,6 +1,6 @@
-# AMBRE: Aligned Meta-Path and Non-Backtracking Relational Encoding
+# AMBRE: Boundary-Preserving Meta-Path and Non-Backtracking Structural Transfer for Multi-Knowledge-Graph Completion
 
-This repository provides an anonymous, compact implementation of **AMBRE**: **Aligned Meta-Path and Non-Backtracking Relational Encoding** for knowledge graph completion over multiple heterogeneous knowledge graphs.
+This repository provides an anonymous, compact implementation of **AMBRE: Boundary-Preserving Meta-Path and Non-Backtracking Structural Transfer for Multi-Knowledge-Graph Completion** for knowledge graph completion over multiple heterogeneous knowledge graphs.
 
 This code is packaged as a lightweight extension that **depends on PyKEEN** for triples factories, dataset utilities, and typing support. It is not a full copy of the PyKEEN repository.
 
