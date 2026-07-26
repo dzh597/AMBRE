@@ -1,75 +1,92 @@
 # AMBRE: Aligned Meta-Path and Non-Backtracking Relational Encoding
 
-This repository extends PyKEEN with **AMBRE**: **Aligned Meta-Path and Non-Backtracking Relational Encoding** for knowledge graph completion over multiple heterogeneous knowledge graphs.
+This repository provides an anonymous, compact implementation of **AMBRE**: **Aligned Meta-Path and Non-Backtracking Relational Encoding** for knowledge graph completion over multiple heterogeneous knowledge graphs.
+
+This code is packaged as a lightweight extension that **depends on PyKEEN** for triples factories, dataset utilities, and typing support. It is not a full copy of the PyKEEN repository.
 
 Main command-line entry point:
 
 ```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments
+PYTHONPATH=src python -m ambre.experiments
 ```
 
-AMBRE supports joint training over multiple heterogeneous knowledge graphs while preserving dataset-specific entity spaces, relation spaces, sampling spaces, and filtered evaluation spaces. It consists of three main components:
+AMBRE supports joint training over multiple heterogeneous knowledge graphs while preserving dataset-specific entity spaces, relation spaces, negative-sampling spaces, and filtered-evaluation spaces. It consists of three main components:
 
-1. **MUG: Meta-path-aware Universal Heterogeneous Graph Pre-Training**  
-   Builds relation-aware structural features and relation-sequence views from training triples.
+1. **MUG-style structural feature construction**  
+   Builds relation-aware structural features and relation-sequence views from each graph's training triples.
 2. **Shared Non-Backtracking Spectral Encoder**  
    Shares structural encoder parameters across graphs without merging graphs or sharing entity/relation identifiers.
-3. **Versioned Cache Training**  
-   Uses cache versions, stale flags, and rotating view refreshes to separate high-frequency KGC optimization from low-frequency full-graph structural refresh.
+3. **Versioned Structural Cache Training**  
+   Uses dataset-specific graph-level structural caches, stale flags, model versions, and selected-view refreshes to separate high-frequency KGC optimization from lower-frequency structural refresh.
 
 ---
 
 ## 1. Environment Setup
 
-The experiments were run with the conda environment `keen10`:
+Create or activate an environment with PyTorch, PyKEEN, tqdm, and pytest. For example:
 
 ```bash
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate keen10
 ```
 
-Set `PYTHONPATH` before running experiments:
+Install this repository in editable mode:
+
+```bash
+pip install -e .
+```
+
+Alternatively, set `PYTHONPATH` before running commands:
 
 ```bash
 export PYTHONPATH=src
 ```
 
-Alternatively, prefix each command with:
-
-```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments ...
-```
-
 Quick sanity checks:
 
 ```bash
-PYTHONPATH=src python -m compileall -q src/pykeen/contrib/mugkgc
-PYTHONPATH=src pytest -q tests/test_mugkgc_nb_encoder.py tests/test_batch_size_reduction.py
+PYTHONPATH=src python -m compileall -q src tests
+PYTHONPATH=src pytest -q
+```
+
+Expected smoke-test result:
+
+```text
+3 passed
 ```
 
 ---
 
-## 2. Dataset Names
+## 2. Included Dataset Names
 
-Commonly used dataset names:
+The anonymous repository includes local copies of the following datasets:
 
 ```text
 FB15k237
 WN18RR / wn18rr
+YAGO310 / YAGO3-10 / yago3-10
 Kinships / kinships
 Nations / nations
+UMLS / umls
 ```
+
+The local dataset folders are:
+
+```text
+datasets/fb15k-237
+datasets/wn18rr
+datasets/yago3-10
+datasets/kinships
+datasets/nations
+datasets/umls
+```
+
+`Wikidata5M` is intentionally not included.
 
 The standard four-KG setting uses:
 
 ```bash
 --datasets FB15k237 WN18RR Kinships Nations
-```
-
-or:
-
-```bash
---datasets FB15k237 wn18rr kinships nations
 ```
 
 Be careful with spelling. For example, `wm18rr` is invalid.
@@ -86,11 +103,11 @@ K_g = (E_g, R_g, T_g_train, T_g_valid, T_g_test)
 
 AMBRE does not merge input graphs and does not create cross-graph edges. Each graph keeps its own:
 
-- entity identifiers
-- relation identifiers
-- training, validation, and testing triples
-- negative sampling space
-- filtered evaluation space
+- entity identifiers;
+- relation identifiers;
+- training, validation, and testing triples;
+- negative sampling space;
+- filtered evaluation space.
 
 The structural encoder parameters are shared across graphs.
 
@@ -118,16 +135,26 @@ This maps graph-specific structural features into a shared latent dimension `d`.
 
 ### 3.2 Relation-Sequence Views
 
-MUG constructs one-hop and two-hop relation-sequence views for each graph:
+AMBRE constructs one-hop and two-hop relation-sequence views for each graph:
 
-- one-hop: `(r)`
-- two-hop: `(r1, r2)`
+- one-hop: `(r)`;
+- two-hop: `(r1, r2)`.
 
-Each view corresponds to a sparse adjacency matrix. To control memory and runtime, AMBRE retains frequent top-K views and refreshes view-level representations in a rotating schedule during training.
+Each view corresponds to a sparse directed adjacency matrix. To control memory and runtime, AMBRE retains frequent top-K views and uses a selected subset during training-time structural refresh.
+
+Important view-related options:
+
+```bash
+--nb-top-k 8
+--nb-min-count 5
+--nb-max-two-hop-paths 50000
+--nb-max-two-hop-paths-per-middle 128
+--nb-max-edges-per-view 10000
+```
 
 ### 3.3 Shared Non-Backtracking Encoder
 
-For each view, an edge `(u, v)` is lifted into an edge state. The non-backtracking transition allows:
+For each selected view, an edge `(u, v)` is lifted into an edge state. The non-backtracking transition allows:
 
 ```text
 (u, v) -> (v, w), where w != u
@@ -137,16 +164,18 @@ This prevents immediate reversal and reduces redundant local propagation while p
 
 ### 3.4 Cache, Stale Flags, and Versioned Training
 
-AMBRE maintains a dataset-specific cache:
+The current implementation maintains a dataset-specific **graph-level structural cache**:
 
 ```text
-C_g = {Z_bar_g, view caches, aux_loss_bar, cache_version, stale_flag, reuse_counter, view_pointer, ...}
+C_g = {Z_bar_g, aux_loss_bar, cache_version, stale_flag, stale_since_version, view_cursor}
 ```
+
+The implementation does **not** persist separate view-level entity caches. During a structural refresh, it selects views according to `--mug-view-refresh-strategy` and recomputes the graph-level structural representation from the selected views.
 
 Training uses two paths:
 
-- **Fast path**: if the cache is not stale, reuse detached `Z_bar_g` and update only the KGC objective.
-- **Slow path**: if the cache is stale, refresh the active view subset, update MUG/NB encoder parameters, and write new representations back to the cache.
+- **Cache-reuse path**: if the structural cache is still valid, reuse the cached graph-level representation and update the KGC objective.
+- **Refresh path**: if the cache is stale for enough model-version updates, recompute structural representations using the active view subset, compute auxiliary losses, and update the graph-level cache.
 
 Common cache-control parameters:
 
@@ -189,16 +218,20 @@ only the first 5000 triples are evaluated. For full test evaluation, remove `--e
 
 # 5. Experiment Commands for Six Models
 
-This section provides commands for DistMult, ComplEx, RotatE, TuckER, PairRE, and QuatE.
+This section provides commands for DistMult, ComplEx, RotatE, TuckER, PairRE, and QuatE. All commands use the anonymous entry point:
+
+```bash
+PYTHONPATH=src python -m ambre.experiments
+```
 
 ---
 
-## 5.1 DistMult: Four-KG Training with MUG/NB
+## 5.1 DistMult: Four-KG Training with AMBRE/NB
 
 ```bash
 mkdir -p results/tune
 
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 WN18RR Kinships Nations \
   --embedding-dim 256 \
   --scoring-function distmult \
@@ -226,12 +259,12 @@ PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
 
 ---
 
-## 5.2 ComplEx: Four-KG Training with MUG/NB
+## 5.2 ComplEx: Four-KG Training with AMBRE/NB
 
 ```bash
 mkdir -p results/tune
 
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 WN18RR Kinships Nations \
   --embedding-dim 256 \
   --scoring-function complex \
@@ -261,12 +294,14 @@ PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
 
 ## 5.3 RotatE: Two-Stage Training
 
-RotatE is trained in two stages: a warm-up stage followed by a relation-entity bias fine-tuning stage.
+RotatE can be trained in two stages: a warm-up stage followed by relation-entity bias fine-tuning.
 
 ### Stage 1: Warm-Up from Scratch
 
 ```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+mkdir -p results/main_fb15k237_rotate_from_scratch
+
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 \
   --embedding-dim 300 \
   --scoring-function rotate \
@@ -306,7 +341,7 @@ PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
 ### Stage 2: Relation-Entity Bias Fine-Tuning
 
 ```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 \
   --embedding-dim 300 \
   --scoring-function rotate \
@@ -353,12 +388,14 @@ PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
 
 ## 5.4 TuckER: Four-Stage Training
 
-TuckER is trained in four stages: warm-up, bias adaptation, type-constrained continuation, and final low-smoothing fine-tuning.
+TuckER can be trained in four stages: warm-up, bias adaptation, type-constrained continuation, and final low-smoothing fine-tuning.
 
 ### Stage 1: Warm-Up from Scratch
 
 ```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+mkdir -p results/main_fb15k237_tucker_from_scratch
+
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 \
   --embedding-dim 300 \
   --scoring-function tucker \
@@ -401,7 +438,7 @@ PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
 ### Stage 2: Entity/Relation Bias Adaptation
 
 ```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 \
   --embedding-dim 300 \
   --scoring-function tucker \
@@ -450,7 +487,7 @@ PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
 ### Stage 3: Type-Constrained Continuation
 
 ```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 \
   --embedding-dim 300 \
   --scoring-function tucker \
@@ -500,7 +537,7 @@ PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
 ### Stage 4: Final Fine-Tuning with Label Smoothing 0
 
 ```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 \
   --embedding-dim 300 \
   --scoring-function tucker \
@@ -556,7 +593,9 @@ PairRE should not be trained from scratch with the final low-learning-rate fine-
 ### Stage 1: Warm-Up from Scratch
 
 ```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+mkdir -p results/main_fb15k237_pairre_from_scratch
+
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 \
   --embedding-dim 300 \
   --scoring-function pairre \
@@ -597,7 +636,7 @@ PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
 ### Stage 2: Continue Training Toward the Baseline
 
 ```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 \
   --embedding-dim 300 \
   --scoring-function pairre \
@@ -644,7 +683,7 @@ PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
 ### Stage 3: Light Fine-Tuning
 
 ```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 \
   --embedding-dim 300 \
   --scoring-function pairre \
@@ -695,7 +734,9 @@ PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
 QuatE uses quaternion initialization. `embedding-dim=1200` corresponds to a 300-dimensional quaternion representation because QuatE requires the embedding dimension to be divisible by 4.
 
 ```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+mkdir -p results/main_fb15k237_quate_from_scratch
+
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 \
   --embedding-dim 1200 \
   --scoring-function quate \
@@ -742,12 +783,12 @@ PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
 
 ## 6. Full Test Template
 
-After training, use `num-epochs 0` to load a checkpoint and run evaluation. Remove `--eval-max-triples` for full test evaluation.
+After training, use `--num-epochs 0` to load a checkpoint and run evaluation. Remove `--eval-max-triples` for full test evaluation.
 
 Example for RotatE:
 
 ```bash
-PYTHONPATH=src python -m pykeen.contrib.mugkgc.experiments \
+PYTHONPATH=src python -m ambre.experiments \
   --datasets FB15k237 \
   --embedding-dim 300 \
   --scoring-function rotate \
@@ -824,7 +865,7 @@ The low-learning-rate configuration is intended for fine-tuning a model that has
 --relation-entity-bias-weight 0.0
 ```
 
-usually leads to results far below the baseline.
+usually leads to results far below the warmed-up configuration.
 
 ### Q3: Why does QuatE use `embedding-dim=1200`?
 
@@ -835,17 +876,29 @@ QuatE uses quaternion representations. The implementation requires `embedding_di
 - With `--eval-max-triples 5000`, only the first 5000 triples are evaluated. This is faster and useful during tuning.
 - Without `--eval-max-triples`, the full test set is evaluated. This should be used for final reporting.
 
+### Q5: Does AMBRE use cross-graph entity alignment?
+
+No. AMBRE keeps entity and relation dictionaries graph-local. It shares structural encoder parameters but does not assume entity or relation identifiers are aligned across graphs.
+
+### Q6: Does the implementation store persistent view-level caches?
+
+No. The current anonymous implementation stores graph-level structural representations and auxiliary losses. View selection controls which views are recomputed during a refresh; persistent per-view entity caches are not stored.
+
 ---
 
 ## 9. Important Code Paths
 
 ```text
-src/pykeen/contrib/mugkgc/experiments.py    # command-line entry point
-src/pykeen/contrib/mugkgc/model.py          # MUGKGC model and scoring functions
-src/pykeen/contrib/mugkgc/training.py       # training loop
-src/pykeen/contrib/mugkgc/evaluation.py     # filtered evaluation
-src/pykeen/contrib/mugkgc/representation.py # MUG representations and cache refresh
-src/pykeen/contrib/mugkgc/encoder.py        # shared non-backtracking encoder
+src/ambre/experiments.py     # command-line entry point
+src/ambre/model.py           # model, entity mixing, and scoring functions
+src/ambre/training.py        # joint multi-graph training loop
+src/ambre/evaluation.py      # graph-local filtered evaluation
+src/ambre/representation.py  # structural representations and cache refresh
+src/ambre/encoder.py         # shared non-backtracking encoder
+src/ambre/features.py        # structural feature construction
+src/ambre/views.py           # relation-sequence view construction
+src/ambre/sampler.py         # dataset-aware batching and negative sampling
+src/ambre/multi_factory.py   # wrapper around multiple PyKEEN triples factories
 ```
 
 ---
@@ -853,8 +906,37 @@ src/pykeen/contrib/mugkgc/encoder.py        # shared non-backtracking encoder
 ## 10. Recommended Experiment Order
 
 ```text
-1. Run the DistMult and ComplEx four-KG baseline experiments.
-2. Run staged training for RotatE, TuckER, PairRE, and QuatE on FB15k237.
-3. Run full test evaluation on the final checkpoint.
-4. If extending staged training to the four-KG setting, increase steps-per-epoch or use weighted sampling to avoid under-training FB15k237.
+1. Run quick smoke tests with Nations and Kinships.
+2. Run DistMult and ComplEx four-KG experiments.
+3. Run staged training for RotatE, TuckER, PairRE, and QuatE on FB15k237.
+4. Run full test evaluation on the final checkpoint.
+5. If extending staged training to the four-KG setting, increase steps-per-epoch or use weighted sampling to avoid under-training FB15k237.
 ```
+
+---
+
+## 11. Minimal CPU Debug Command
+
+Use this command to check that the local datasets and code path are working:
+
+```bash
+PYTHONPATH=src python -m ambre.experiments \
+  --datasets Nations Kinships \
+  --embedding-dim 8 \
+  --scoring-function distmult \
+  --nb-max-length 1 \
+  --nb-top-k 2 \
+  --nb-min-count 1 \
+  --batch-size 4 \
+  --num-epochs 1 \
+  --steps-per-epoch 2 \
+  --num-negs-per-pos 1 \
+  --skip-evaluation \
+  --device cpu
+```
+
+---
+
+## 12. Dependency Statement
+
+This code depends on PyKEEN. In particular, it uses PyKEEN's dataset interfaces, `TriplesFactory`, `CoreTriplesFactory`, and mapped-triple conventions. The AMBRE implementation itself is contained in `src/ambre/`.
