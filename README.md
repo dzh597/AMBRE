@@ -67,7 +67,7 @@ WN18RR / wn18rr
 YAGO310 / YAGO3-10 / yago3-10
 Kinships / kinships
 Nations / nations
-UMLS / umls
+DB100K / DB100K
 ```
 
 The local dataset folders are:
@@ -78,10 +78,9 @@ datasets/wn18rr
 datasets/yago3-10
 datasets/kinships
 datasets/nations
-datasets/umls
+datasets/DB100K
 ```
 
-`Wikidata5M` is intentionally not included.
 
 The standard four-KG setting uses:
 
